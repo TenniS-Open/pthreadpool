@@ -352,14 +352,16 @@ struct pthreadpool* pthreadpool_create(size_t threads_count) {
 	pthread_cond_init(&threadpool->command_condvar, NULL);
 #endif
 
+	threadpool->active_threads = threadpool->threads_count - 1;
 #if PTHREADPOOL_USE_FUTEX
 	threadpool->has_active_threads = 1;
 #endif
-	threadpool->active_threads = threadpool->threads_count;
 
 	for (size_t tid = 0; tid < threads_count; tid++) {
 		threadpool->threads[tid].thread_number = tid;
-		pthread_create(&threadpool->threads[tid].thread_object, NULL, &thread_main, &threadpool->threads[tid]);
+		if (tid + 1 != threads_count) {
+			pthread_create(&threadpool->threads[tid].thread_object, NULL, &thread_main, &threadpool->threads[tid]);
+		}
 	}
 
 	/* Wait until all threads initialize */
@@ -391,7 +393,7 @@ void pthreadpool_compute_1d(
 			threadpool->function = function;
 			threadpool->argument = argument;
 
-			threadpool->active_threads = threadpool->threads_count;
+			threadpool->active_threads = threadpool->threads_count - 1;
 			threadpool->has_active_threads = 1;
 
 			/* Spread the work between threads */
@@ -423,7 +425,7 @@ void pthreadpool_compute_1d(
 			threadpool->argument = argument;
 
 			/* Locking of completion_mutex not needed: readers are sleeping on command_condvar */
-			threadpool->active_threads = threadpool->threads_count;
+			threadpool->active_threads = threadpool->threads_count - 1;
 
 			/* Spread the work between threads */
 			for (size_t tid = 0; tid < threadpool->threads_count; tid++) {
@@ -449,7 +451,10 @@ void pthreadpool_compute_1d(
 			pthread_cond_broadcast(&threadpool->command_condvar);
 		#endif
 
-		/* Wait until the threads finish computation */
+		/* Do computations as thread $(threads_count - 1) */
+		thread_compute_1d(threadpool, &threadpool->threads[threadpool->threads_count - 1]);
+
+		/* Wait until worker threads finish computation */
 		wait_worker_threads(threadpool);
 
 		/* Unprotect the global threadpool structures */
@@ -591,7 +596,7 @@ void pthreadpool_compute_2d_tiled(
 void pthreadpool_destroy(struct pthreadpool* threadpool) {
 	if (threadpool != NULL) {
 		#if PTHREADPOOL_USE_FUTEX
-			threadpool->active_threads = threadpool->threads_count;
+			threadpool->active_threads = threadpool->threads_count - 1;
 			threadpool->has_active_threads = 1;
 			__sync_synchronize();
 			threadpool->command = threadpool_command_shutdown;
@@ -602,7 +607,7 @@ void pthreadpool_destroy(struct pthreadpool* threadpool) {
 			pthread_mutex_lock(&threadpool->command_mutex);
 
 			/* Locking of completion_mutex not needed: readers are sleeping on command_condvar */
-			threadpool->active_threads = threadpool->threads_count;
+			threadpool->active_threads = threadpool->threads_count - 1;
 
 			/* Update the threadpool command. */
 			threadpool->command = threadpool_command_shutdown;
@@ -615,7 +620,7 @@ void pthreadpool_destroy(struct pthreadpool* threadpool) {
 		#endif
 
 		/* Wait until all threads return */
-		for (size_t thread = 0; thread < threadpool->threads_count; thread++) {
+		for (size_t thread = 0; thread + 1 < threadpool->threads_count; thread++) {
 			pthread_join(threadpool->threads[thread].thread_object, NULL);
 		}
 
